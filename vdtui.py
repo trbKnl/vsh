@@ -26,7 +26,7 @@
 # Just include this whole file in your project as-is.  If you do make
 # modifications, please keep the base vdtui version and append your own id and
 # version.
-__version__ = 'saul.pw/vdtui v0.96+vsh-0.1'
+__version__ = 'saul.pw/vdtui v0.96+vsh-0.2'
 __author__ = 'Saul Pwanson <vdtui@saul.pw>'
 __license__ = 'MIT'
 __status__ = 'Beta'
@@ -165,6 +165,7 @@ alias('KEY_END', 'gj')
 command('^L', 'vd.scr.clear()', 'redraw entire terminal screen')
 command('^G', 'status(statusLine)', 'show info for the current sheet')
 command('^V', 'status(__version__)', 'show version information')
+command('^P', 'vd.push(TextSheet("statusHistory", vd.statusHistory))', 'open sheet with all previous status messages')
 
 command('<', 'moveToNextRow(lambda row,sheet=sheet,col=cursorCol,val=cursorValue: col.getValue(row) != val, reverse=True) or status("no different value up this column")', 'move up to previous value in this column')
 command('>', 'moveToNextRow(lambda row,sheet=sheet,col=cursorCol,val=cursorValue: col.getValue(row) != val) or status("no different value down this column")', 'move down to next value in this column')
@@ -229,6 +230,10 @@ command('g,', 'select(gatherBy(lambda r,v=cursorRow: r == v), progress=False)', 
 
 command('"', 'vd.push(sheet.copy("_selected")).rows = list(sheet.selectedRows)', 'push duplicate sheet with only selected rows')
 command('g"', 'vd.push(sheet.copy())', 'push duplicate sheet')
+
+command('=', 'addColumn(ColumnExpr(sheet, input("new column expr=", "expr")), index=cursorColIndex+1)', 'add column by expr')
+command('g=', 'setValuesFromExpr(cursorCol, selectedRows, input("set selected=", "expr"))', 'set this column in selected rows by expr')
+
 command('V', 'vd.push(TextSheet("%s[%s].%s" % (name, cursorRowIndex, cursorCol.name), cursorValue))', 'view readonly contents of this cell in a new sheet')
 
 command('`', 'vd.push(source if isinstance(source, Sheet) else None)', 'push source sheet')
@@ -785,6 +790,9 @@ class Sheet:
             yield i
 
         self.progressMade = self.progressTotal
+
+    def addRow(self, row):
+        self.rows.append(row)
 
     def command(self, keystrokes, execstr, helpstr):
         'Populate command, help-string and execution string for keystrokes.'
@@ -1536,6 +1544,12 @@ class Column:
         for r in rows:
             self.setter(r, value)
 
+    @async
+    def setValuesFromExpr(self, col, rows, expr):
+        for r in self.genProgress(rows):
+            col.setValues([r], LazyMapping(self, r)(expr))
+
+
     def getMaxWidth(self, rows):
         'Return the maximum length of any cell in column or its header.'
         w = 0
@@ -1553,6 +1567,11 @@ class Column:
 
 # ---- Column makers
 
+def setitem(r, i, v):  # function needed for use in lambda
+    r[i] = v
+
+
+
 def ColumnAttr(attrname, type=anytype, **kwargs):
     'Return Column object with `attrname` from current row Python object.'
     return Column(attrname, type=type,
@@ -1562,9 +1581,6 @@ def ColumnAttr(attrname, type=anytype, **kwargs):
 
 def ColumnItem(attrname, itemkey, **kwargs):
     'Return Column object (with getitem/setitem) on the row Python object.'
-    def setitem(r, i, v):  # function needed for use in lambda
-        r[i] = v
-
     return Column(attrname,
             getter=lambda r,i=itemkey: r[i],
             setter=lambda r,v,i=itemkey,f=setitem: f(r,i,v),
@@ -1599,6 +1615,40 @@ def ColumnAttrNamedObject(name):
     return Column(name, getter=lambda r,name=name: _getattrname(r, name),
                         setter=lambda r,v,name=name: setattr(r, name, v))
 
+
+class LazyMapping:
+    'Calculate column values as needed.'
+    def __init__(self, sheet, row):
+        self.row = row
+        self.sheet = sheet
+
+    def keys(self):
+        return [c.name for c in self.sheet.columns if c.name.isidentifier()]
+
+    def __call__(self, expr):
+        return eval(expr, getGlobals(), self)
+
+    def __getitem__(self, colname):
+        colnames = [c.name for c in self.sheet.columns]
+        if colname in colnames:
+            colidx = colnames.index(colname)
+            return self.sheet.columns[colidx].getValue(self.row)
+        else:
+            raise KeyError(colname)
+
+    def __getattr__(self, colname):
+        return self.__getitem__(colname)
+
+
+def ColumnExpr(sheet, expr):
+    'Create new `Column` from Python expression.'
+    if expr:
+        vc = Column(expr)  # or default name?
+        vc.expr = expr
+        vc.getter = lambda r,c=vc,s=sheet: LazyMapping(s, r)(c.expr)
+        return vc
+
+###
 
 def input(prompt, type='', **kwargs):
     'Compose input prompt.'
@@ -1673,14 +1723,14 @@ class TextSheet(Sheet):
             for L in self.genProgress(self.source.splitlines()):
                 self.addLine(L)
         elif isinstance(self.source, io.IOBase):
-            for L in self.source:
-                self.addLine(L[:-1])
+            for L in readlines(self.source):
+                self.addLine(L)
         elif isinstance(self.source, Path):
             self.progressMade = 0
             self.progressTotal = self.source.filesize
             with self.source.open_text() as fp:
-                for L in fp:
-                    self.addLine(L[:-1])
+                for L in readlines(fp):
+                    self.addLine(L)
                     self.progressMade += len(L)
         else:
             error('unknown text type ' + str(type(self.source)))
@@ -1690,9 +1740,9 @@ class TextSheet(Sheet):
         if options.textwrap:
             startingLine = len(self.rows)
             for i, L in enumerate(textwrap.wrap(text, width=self.vd.windowWidth-2)):
-                self.rows.append((startingLine+i, L))
+                self.addRow((startingLine+i, L))
         else:
-            self.rows.append((len(self.rows), text))
+            self.addRow((len(self.rows), text))
 
 class ColumnsSheet(Sheet):
     def __init__(self, srcsheet):
@@ -2004,6 +2054,12 @@ class Path:
             return gzip.open(self.resolve(), mode='rt', encoding=options.encoding, errors=options.encoding_errors)
         else:
             return open(self.resolve(), mode=mode, encoding=options.encoding, errors=options.encoding_errors)
+
+    def readlines(self):
+        for i, line in enumerate(self.open_text()):
+            if i < options.skiplines:
+                continue
+            yield line[:-1]
 
     def read_text(self):
         with self.open_text() as fp:
