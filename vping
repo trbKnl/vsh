@@ -8,9 +8,9 @@ import sh
 option('ping_count', 3, 'send this many pings to each host')
 option('ping_interval', 0.1, 'wait between ping rounds, in seconds')
 
-command('^C', 'for s in topSheets: s.stop = True; status("user stopped")', 'stop pinging')
-command('T', 'vd.push(StatsSheet("traceroute_"+sheet.name, sheet))', 'push traceroute sheet with summary pingtimes')
-command('^S', 'save_tsv(sheet, input("save tsv to: ", value=sheet.source+".tsv"))', 'save this sheet as tsv')
+globalCommand('^C', 'for s in topSheets: s.stop = True; status("user stopped")', 'stop pinging')
+globalCommand('T', 'vd.push(StatsSheet("traceroute_"+sheet.name, sheet))', 'push traceroute sheet with summary pingtimes')
+globalCommand('^S', 'save_tsv(sheet, input("save tsv to: ", value=sheet.source+".tsv"))', 'save this sheet as tsv')
 
 options.aggr_null_filter = 'falses'   # don't aggregate 0 values in summaries
 

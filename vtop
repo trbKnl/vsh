@@ -4,9 +4,9 @@ from vdtui import *
 
 import psutil
 
-command('c', 'vd.push(vd.cpuStats)', 'CPU stats')
-command('m', 'vd.push(vd.memStats)', 'Memory stats')
-command('p', 'vd.push(vd.processes)', 'Process stats')
+globalCommand('c', 'vd.push(vd.cpuStats)', 'CPU stats')
+globalCommand('m', 'vd.push(vd.memStats)', 'Memory stats')
+globalCommand('p', 'vd.push(vd.processes)', 'Process stats')
 
 class CPUStatsSheet(Sheet):
     def __init__(self):
@@ -31,9 +31,7 @@ class CPUStatsSheet(Sheet):
 
 
 class MemStatsSheet(Sheet):
-    def __init__(self):
-        super().__init__('mem_stats')
-        self.columns = [ColumnItem('name', 0), ColumnItem('value', 1)]
+    columns = [ColumnItem('name', 0), ColumnItem('value', 1)]
 
     def reload(self):
         self.rows = []
@@ -44,23 +42,22 @@ class MemStatsSheet(Sheet):
 
 
 class UsefulProcessesSheet(Sheet):
-    def __init__(self):
-        super().__init__('processes')
-        self.command('^K', 'os.kill(cursorRow.pid, int(chooseOne(range(16))))', 'kill(2) send a signal to a process')
-        self.command('R', 'vd.push(RlimitsSheet(cursorRow.name() + "_rlimits", cursorRow))', 'push rlimits for this process')
-
-        self.columns = [
-                Column('pid', type=int, getter=lambda r: r[0].pid),
-                Column('name', getter=lambda r: r[0].name()),
-                Column('status', getter=lambda r: r[0].status()),
-                Column('cmdline', getter=lambda r: ' '.join(r[0].cmdline())),
-                Column('user', getter=lambda r: r[0].username()),
-                Column('real_uid', type=int, width=0, getter=lambda r: r[0].uids()[0]),
-                Column('effective_uid', type=int, width=0, getter=lambda r: r[0].uids()[1]),
-                Column('mem_uss', type=int, getter=lambda r: r[1].mem_uss),
-                Column('user_time_s', type=float, getter=lambda r: r[0].cpu_times()[0]),
-                Column('system_time_s', type=float, getter=lambda r: r[0].cpu_times()[1]),
-        ]
+    columns = [
+        Column('pid', type=int, getter=lambda r: r[0].pid),
+        Column('name', getter=lambda r: r[0].name()),
+        Column('status', getter=lambda r: r[0].status()),
+        Column('cmdline', getter=lambda r: ' '.join(r[0].cmdline())),
+        Column('user', getter=lambda r: r[0].username()),
+        Column('real_uid', type=int, width=0, getter=lambda r: r[0].uids()[0]),
+        Column('effective_uid', type=int, width=0, getter=lambda r: r[0].uids()[1]),
+        Column('mem_uss', type=int, getter=lambda r: r[1].mem_uss),
+        Column('user_time_s', type=float, getter=lambda r: r[0].cpu_times()[0]),
+        Column('system_time_s', type=float, getter=lambda r: r[0].cpu_times()[1]),
+    ]
+    commands = [
+        Command('^K', 'os.kill(cursorRow.pid, int(chooseOne(range(16))))', 'kill(2) send a signal to a process'),
+        Command('R', 'vd.push(RlimitsSheet(cursorRow.name() + "_rlimits", cursorRow))', 'push rlimits for this process')
+    ]
 
     def reload(self):
         self.rows = []
@@ -69,11 +66,10 @@ class UsefulProcessesSheet(Sheet):
 
 
 class ProcessesSheet(Sheet):
-    def __init__(self):
-        super().__init__('processes')
-        self.command('^K', 'os.kill(cursorRow.pid, int(chooseOne(range(16))))', 'kill(2) send a signal to a process')
-
-        self.columns = [
+    commands = [
+        Command('^K', 'os.kill(cursorRow.pid, int(chooseOne(range(16))))', 'kill(2) send a signal to a process')
+    ]
+    columns = [
                 Column('pid', type=int, getter=lambda r: r.pid),
                 Column('name', getter=lambda r: r.name()),
                 Column('status', getter=lambda r: r.status()),
@@ -115,6 +111,9 @@ class ProcessesSheet(Sheet):
                 Column('num_fds', type=int, getter=lambda r: r.num_fds()),
                 Column('num_threads', type=int, getter=lambda r: r.num_threads()),
         ]
+
+    def __init__(self):
+        super().__init__('processes')
         self.nKeys = 2
         self.columns.extend(Column('mem_'+k, type=int, getter=lambda r,i=i: r.memory_full_info()[i], cache=True) for i,k in enumerate(psutil.Process().memory_full_info()._fields))
         # mem_uss is probably the most representative metric for determining how much memory is actually being used by a process. It represents the amount of memory that would be freed if the process was terminated right now.
@@ -150,7 +149,7 @@ class RlimitsSheet(Sheet):
                 self.addRow((r[7:], getattr(psutil, r)))
 
 vd().cpuStats = CPUStatsSheet()
-vd().memStats = MemStatsSheet()
+vd().memStats = MemStatsSheet('mem_stats')
 vd().processes = ProcessesSheet()
 
 run([vd().processes])
