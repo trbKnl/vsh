@@ -1,0 +1,142 @@
+#!/usr/bin/env python3
+
+import sys
+import sh
+import mutagen
+import mutagen.id3
+
+from vdtui import *
+
+option('recursive', False, 'find files recursively')
+option('hidden', False, 'include hidden files')
+
+globalCommand('Q', 'vd.push(cmdQueue)', 'push command queue sheet')
+globalCommand('^S', 'cmdQueue.exec_queued()', 'apply changes in command queue')
+
+globalCommand('1', 'vd.canon = set(sheet.key(r) for r in sheet.rows)', 'set keys from the current sheet as canon')
+
+
+usefulFrames = ''.split()
+
+def mmss(secs):
+    return '%02d:%02d' % (int(secs)/60, int(secs)%60)
+
+def getMutagen(p):
+    try:
+        return mutagen.File(p.resolve())
+    except Exception as e:
+        return e
+
+def runsh(*args):
+    r = io.StringIO()
+    sh.Command(args[0])(*args[1:], _out=r)
+    status(' '.join(args))
+    return r.getvalue()
+
+# rowdef: [Path, stat_t, mutagen.FileType]
+class DirSheet(Sheet):
+    'Sheet displaying directory, using ENTER to open a particular file.'
+    commands = [
+        Command(ENTER, 'p=cursorRow[0]; vd.push(DirSheet(p.name, source=p))', 'open file'),
+        Command('d', 'cmdQueue.qsh("rm", cursorRow[0].resolve()); rows.pop(cursorRowIndex)', 'queue this file for deletion')
+        # TODO: 'gd' queues all for deletion
+        # TODO: delete should queue rm -rf for directory?
+
+    ]
+    columns = [
+        Column('name', type=str,
+               getter=lambda col,r: r[0].name,
+               setter=lambda col,r,v: c.sheet.rename(r, v)),
+        Column('ext', type=str, getter=lambda col,r: r[0].is_dir() and '/' or r[0].suffix),
+        Column('size_mb', type=float, fmtstr='{:.1f}',
+               getter=lambda col,r: r[1].st_size/(1024*1024.0)),
+        Column('mtime', type=date, fmtstr='%Y-%m-%d', getter=lambda col,r: r[1].st_mtime),
+
+#        Column('FileType', getter=lambda col,r: r[2].info.pprint()),
+#        Column('mutagen', getter=lambda col,r: r[2]),
+        Column('length', getter=lambda col,r: mmss(r[2].info.length)),
+        Column('channels', width=0, type=int, getter=lambda col,r: r[2].info.channels),
+        Column('bitrate', type=int, getter=lambda col,r: r[2].info.bitrate),
+        Column('sample_rate', width=0, type=int, getter=lambda col,r: r[2].info.sample_rate),
+        Column('encoder_info', getter=lambda col,r: r[2].info.encoder_info),
+        Column('encoder_settings', getter=lambda col,r: r[2].info.encoder_settings),
+        Column('bitrate_mode', width=0, getter=lambda col,r: r[2].info.bitrate_mode),
+        Column('track_gain', getter=lambda col,r: r[2].info.track_gain),
+#        Column('track_peak', getter=lambda col,r: r[2].info.track_peak),
+#        Column('album_gain', getter=lambda col,r: r[2].info.album_gain),
+#        Column('mp3_mode', getter=lambda col,r: r[2].info.mode),
+
+#        Column('type', type=str, getter=lambda col,r: os.popen('file -b "%s"' % r[0].resolve()).read().strip(), cache=True)
+    ]
+    colorizers = [
+        Colorizer('row', 8, lambda s,c,r,dw,vd=vd(): "red" if (vd.canon and s.key(r) not in vd.canon) else None)
+    ]
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        for k in usefulFrames or mutagen.id3.Frames.keys():
+            self.addColumn(Column(k, getter=lambda col,r,k=k: r[2].tags and str(r[2].tags.get(k, '')) or None))
+
+    def rename(self, row, newname):
+        'queues a mv and renames in row'
+        p = copy(row[0])
+        assert newname
+        p.name = newname
+        cmdQueue.qsh('mv', row[0], p)
+        row[0] = p
+
+    def load_dir(self, startpath):
+        for p in startpath.iterdir():
+            if not options.hidden or not p.name.startswith('.'):
+                self.addRow([p, p.stat(), getMutagen(p)])
+            if options.recursive and p.is_dir():
+                self.load_dir(p)
+
+    @async
+    def reload(self):
+        self.rows = []
+        self.load_dir(self.source)
+
+
+class CommandQueue(Sheet):
+    commands = [
+        Command('x', 'exec_row(cursorRow)', 'execute this command'),
+        Command('gx', 'for r in selectedRows or rows: exec_row(r)', 'execute selected (or all) commands'),
+    ]
+    columns = [
+        ColumnItem('status', 0),
+        ColumnItem('cmd', 1),
+        ColumnItem('arg1', 2),
+        ColumnItem('arg2', 3),
+    ]
+
+    def __init__(self, name, *args, **kwargs):
+        super().__init__(name, *args, **kwargs)
+        self.rows = []
+
+    def exec_row(self, r):
+        r[0] = 'running'
+        ret = runsh(*r[1:])
+        r[0] = ret or 'done'
+
+    def exec_queued(self):
+        for r in self.rows:
+            if r[0] == 'queued':
+                self.exec_row(r)
+
+    def qsh(self, *args):
+        row = [ 'queued' ] + list(x.resolve() if isinstance(x, Path) else x for x in args)
+        self.addRow(row)
+        status('queued: ' + ' '.join(str(x) for x in args[1:]))
+
+cmdQueue = CommandQueue('cmdqueue')
+
+objs = []
+for pathname in sys.argv[1:]:
+    p = Path(pathname)
+    objs.append(DirSheet(p.name, source=p))
+
+vd().canon = None
+
+addGlobals(globals())
+run(*objs)
+

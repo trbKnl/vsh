@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 import sys
+from statistics import mean
 
 from vdtui import *
 import sh
@@ -9,44 +10,41 @@ option('ping_count', 3, 'send this many pings to each host')
 option('ping_interval', 0.1, 'wait between ping rounds, in seconds')
 
 globalCommand('^C', 'for s in topSheets: s.stop = True; status("user stopped")', 'stop pinging')
-globalCommand('T', 'vd.push(StatsSheet("traceroute_"+sheet.name, sheet))', 'push traceroute sheet with summary pingtimes')
-globalCommand('^S', 'save_tsv(sheet, input("save tsv to: ", value=sheet.source+".tsv"))', 'save this sheet as tsv')
+globalCommand('^S', 'save_tsv(sheet, input("save tsv to: ", value=name+".tsv"))', 'save this sheet as tsv')
 
-options.aggr_null_filter = 'falses'   # don't aggregate 0 values in summaries
+options.false_is_null = True
 
-
-def save_tsv(vs, fn):
-    with open(fn, 'w', encoding=options.encoding, errors=options.encoding_errors) as fp:
-        colhdr = '\t'.join(col.name for col in vs.visibleCols) + '\n'
-        fp.write(colhdr)
-        for r in vs.rows:
-            fp.write('\t'.join(col.getDisplayValue(r) for col in vs.visibleCols) + '\n')
-    status('%s save finished' % fn)
-
-
+# rowdef: ColumnPing
 class StatsSheet(Sheet):
+    columns = [
+        Column('hop', type=int, width=5, getter=lambda col,r: col.sheet.source.sources.index(r.ip)+1),
+        Column('hostname', getter=lambda col,r: r.name, width=40),
+        Column('ip',  getter=lambda col,r: r.ip, width=17),
+        Column('avg_ms', type=float, fmtstr='{:.1f}', getter=lambda col,r: mean(r.getValues(col.sheet.source.rows))),
+        Column('max_ms', type=float, fmtstr='{:.1f}', getter=lambda col,r: max(r.getValues(col.sheet.source.rows))),
+        Column('count',  type=int, getter=lambda col,r: len(list(r.getValues(col.sheet.source.rows)))),
+    ]
     def reload(self):
         sheet = self.source
         sheet.reload()
-        self.columns = [
-            Column('hop', type=int, width=5, getter=lambda r,s=sheet: s.sources.index(r.ip)+1),
-            Column('hostname',  getter=lambda r: r.name, width=17),
-            Column('ip',  getter=lambda r: r.ip, width=17),
-            Column('avg_ms', type=float, fmtstr='{:.1f}', getter=lambda r,s=self.source: aggregators['avg'](r.values(s.rows))),
-            Column('max_ms', type=float, fmtstr='{:.1f}', getter=lambda r,s=self.source: aggregators['max'](r.values(s.rows))),
-            Column('count',  type=int, getter=lambda r,s=self.source: aggregators['count'](r.values(s.rows))),
-        ]
 
         self.rows = sheet.columns
 
 
 def ColumnPing(name, ip):
-    c = Column(name, getter=lambda r: r.get(ip), type=float, fmtstr='{:0.1f}')
+    c = Column(name, getter=lambda col,r: r.get(ip), type=float, fmtstr='{:0.1f}')
     c.ip = ip
     return c
 
 
 class PingSheet(Sheet):
+    commands = [
+       Command('T', 'vd.push(StatsSheet("traceroute_"+sheet.name, source=sheet))', 'push traceroute sheet with summary pingtimes')
+    ]
+    def __init__(self, name, source=None, **kwargs):
+        super().__init__(name, source=source, **kwargs)
+        self.sources = [source]
+
     def ping_response(self, row, ip, data):
         for line in data.splitlines():
             m = re.search(r'from ([0-9\.]+).* time=(.*) ms', line)
@@ -143,10 +141,10 @@ class PingSheet(Sheet):
 
 
 def main():
-    run(topSheets)
+    run(*topSheets)
 
 
-pingSheets = [PingSheet(ip, ip) for ip in sys.argv[1:]]
-topSheets = [StatsSheet("traceroute_"+vs.name, vs) for vs in pingSheets]
+pingSheets = [PingSheet(ip, source=ip) for ip in sys.argv[1:]]
+topSheets = [StatsSheet("traceroute_"+vs.name, source=vs) for vs in pingSheets]
 addGlobals(globals())
 main()
